@@ -18,7 +18,8 @@ export class NodeService {
     key_tables: 'database:dbName:tables',
     key_tables_options: 'database:dbName:table:tblName:options',
     key_tables_set: 'database:dbName:table:tblName:items',
-    key_record_marker: 'item',
+    key_record: 'dbName:tblName:item:id',
+    key_attribute: 'dbName:tblName:attribute:id',
   };
 
   constructor() {
@@ -36,21 +37,32 @@ export class NodeService {
     this.config.key_tables_options
       .replace('dbName', database)
       .replace('tblName', table);
+
   private getTableItemSetKey = (database: string, table: string) =>
     this.config.key_tables_set
       .replace('dbName', database)
       .replace('tblName', table);
 
-  private getItemKey = (database: string, table: string, id: string) =>
-    `${database}:${table}:${this.config.key_record_marker}:${id}`;
+  private getRecordKey = (database: string, table: string, id: string) =>
+    this.config.key_record
+      .replace('dbName', database)
+      .replace('tblName', table)
+      .replace('id', id);
 
-  private commit = async (key, payload) => {
+  private getAttributeKey = (database: string, table: string, id: string) =>
+    this.config.key_attribute
+      .replace('dbName', database)
+      .replace('tblName', table)
+      .replace('id', id);
+
+  private write = async (key, payload) => {
     await bluebird.map(Object.entries(payload), async ([field, value]) => {
       if (typeof value == 'string' || typeof value == 'number')
         return await this.redis.hset(key, field, value);
       await this.redis.hset(key, field, JSON.stringify(value));
     });
   };
+
   private async read(key: string) {
     const payload = await this.redis.hgetall(key);
     const reduction = Object.entries(payload).reduce((acc, [field, value]) => {
@@ -71,7 +83,7 @@ export class NodeService {
     const database_options_key = this.getDatabaseOptionsKey(name);
 
     await this.redis.sadd(databases_key, name);
-    await this.commit(database_options_key, options);
+    await this.write(database_options_key, options);
 
     return name;
   }
@@ -80,7 +92,7 @@ export class NodeService {
     const tables_key = this.getTableSetKey(database);
     const tables_options_key = this.getTableOptionsKey(database, name);
     await this.redis.sadd(tables_key, name);
-    await this.commit(tables_options_key, options);
+    await this.write(tables_options_key, options);
     return name;
   }
 
@@ -105,12 +117,12 @@ export class NodeService {
       updated_date: time,
     };
 
-    const key = this.getItemKey(database, table, node.id);
+    const key = this.getRecordKey(database, table, node.id);
     const table_items_key = this.getTableItemSetKey(database, table);
 
     // eslint-disable-next-line @typescript-eslint/ban-ts-comment
     //@ts-ignore
-    await this.commit(key, node);
+    await this.write(key, node);
     await this.redis.sadd(table_items_key, key);
 
     return node.id;
@@ -135,16 +147,16 @@ export class NodeService {
   }
 
   async findOne(database: string, table: string, id: string) {
-    const key = this.getItemKey(database, table, id);
+    const key = this.getRecordKey(database, table, id);
     return this.read(key);
   }
 
   async update(id: string, { database, table, payload }: UpdateNodeDto) {
     const time = new Date().getTime();
 
-    const key = this.getItemKey(database, table, id);
+    const key = this.getRecordKey(database, table, id);
 
-    const prev_node = await this.redis.hgetall(key);
+    const prev_node = await this.read(key);
 
     const node: Node = {
       ...prev_node,
@@ -153,7 +165,7 @@ export class NodeService {
       updated_date: time,
     };
 
-    await this.commit(key, node);
+    await this.write(key, node);
 
     return node.id;
   }
